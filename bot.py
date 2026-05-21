@@ -54,7 +54,8 @@ def main_menu():
         keyboard=[
             [KeyboardButton(text="➕ Нова демонстрація")],
             [KeyboardButton(text="📊 Моя статистика (7 днів)")],
-            [KeyboardButton(text="👥 Командна статистика")]
+            [KeyboardButton(text="👥 Командна статистика")],
+            [KeyboardButton(text="🏆 ТОП експерти")]
         ],
         resize_keyboard=True
     )
@@ -150,14 +151,14 @@ async def device(call: CallbackQuery):
     user_state[uid] = "awaiting_comment"
     await call.message.answer("Напиши коментар (або '-')")
 
-# ================= MAIN =================
+# ================= SAVE =================
 @dp.message()
 async def handle_all(message: Message):
 
     uid = message.from_user.id
     text = message.text
 
-    # -------- NAME --------
+    # NAME
     if user_state.get(uid) == "awaiting_name":
 
         async with aiosqlite.connect("data.db") as db:
@@ -171,7 +172,7 @@ async def handle_all(message: Message):
         await message.answer("✅ Зареєстровано!", reply_markup=main_menu())
         return
 
-    # -------- NEW DEMO --------
+    # NEW DEMO
     if text == "➕ Нова демонстрація":
 
         temp[uid] = {
@@ -192,7 +193,7 @@ async def handle_all(message: Message):
         await message.answer("Які стіки використано?", reply_markup=kb.as_markup())
         return
 
-    # -------- SAVE --------
+    # SAVE DEMO
     if user_state.get(uid) == "awaiting_comment" and uid in temp:
 
         data = temp[uid]
@@ -225,7 +226,7 @@ async def handle_all(message: Message):
         await message.answer("✅ Збережено!", reply_markup=main_menu())
         return
 
-    # ================= PERSONAL STATS (FIXED + STICKS) =================
+    # ================= PERSONAL STATS =================
     if text == "📊 Моя статистика (7 днів)":
 
         async with aiosqlite.connect("data.db") as db:
@@ -245,13 +246,12 @@ async def handle_all(message: Message):
             site += r[3]
             device += r[4]
 
-            sticks = r[0] or ""
-
-            if "Silver" in sticks:
+            s = r[0] or ""
+            if "Silver" in s:
                 silver += 1
-            if "Pink" in sticks:
+            if "Pink" in s:
                 pink += 1
-            if "Orange" in sticks:
+            if "Orange" in s:
                 orange += 1
 
         await message.answer(f"""
@@ -264,13 +264,13 @@ async def handle_all(message: Message):
 🌐 Сайт реєстрація: {site}
 📱 Реєстрація пристрою: {device}
 
-🩶 EVO Silver: {silver}
-🩷 EVO Pink Option: {pink}
-🧡 EVO Orange: {orange}
+🩶 Silver: {silver}
+🩷 Pink: {pink}
+🧡 Orange: {orange}
 """)
         return
 
-    # ================= TEAM STATS (ADMIN ONLY) =================
+    # ================= TEAM (ADMIN ONLY) =================
     if text == "👥 Командна статистика":
 
         if uid != ADMIN_ID:
@@ -302,6 +302,36 @@ async def handle_all(message: Message):
 🌐 Сайт реєстрація: {site}
 📱 Реєстрація пристрою: {device}
 """)
+        return
+
+    # ================= TOP EXPERTS (RETURNED) =================
+    if text == "🏆 ТОП експерти":
+
+        if uid != ADMIN_ID:
+            await message.answer("⛔ Немає доступу")
+            return
+
+        async with aiosqlite.connect("data.db") as db:
+            rows = await db.execute_fetchall("""
+            SELECT user_id, COUNT(*) as cnt
+            FROM demos
+            GROUP BY user_id
+            ORDER BY cnt DESC
+            LIMIT 10
+            """)
+
+            users = await db.execute_fetchall("""
+            SELECT user_id, name FROM users
+            """)
+
+        names = {u[0]: u[1] for u in users}
+
+        out = "🏆 ТОП експерти:\n\n"
+
+        for i, r in enumerate(rows, 1):
+            out += f"{i}. {names.get(r[0], 'Невідомий')} — {r[1]} демо\n"
+
+        await message.answer(out)
         return
 
 # ================= RUN =================
