@@ -1,6 +1,6 @@
 import asyncio
 import aiosqlite
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
@@ -54,8 +54,7 @@ def main_menu():
         keyboard=[
             [KeyboardButton(text="➕ Нова демонстрація")],
             [KeyboardButton(text="📊 Моя статистика (7 днів)")],
-            [KeyboardButton(text="👥 Командна статистика")],
-            [KeyboardButton(text="🏆 ТОП експерти")]
+            [KeyboardButton(text="👥 Командна статистика")]
         ],
         resize_keyboard=True
     )
@@ -71,7 +70,13 @@ async def start(message: Message):
 async def sticks(call: CallbackQuery):
 
     uid = call.from_user.id
-    temp.setdefault(uid, {"sticks": [], "buy": 0, "rent": 0, "site_reg": 0, "device_reg": 0})
+    temp.setdefault(uid, {
+        "sticks": [],
+        "buy": 0,
+        "rent": 0,
+        "site_reg": 0,
+        "device_reg": 0
+    })
 
     if call.data == "s_silver":
         temp[uid]["sticks"].append("EVO Silver")
@@ -82,6 +87,7 @@ async def sticks(call: CallbackQuery):
 
     await call.answer("Додано ✔️")
 
+# ================= FLOW =================
 @dp.callback_query(F.data == "done_sticks")
 async def done(call: CallbackQuery):
 
@@ -92,7 +98,6 @@ async def done(call: CallbackQuery):
 
     await call.message.answer("Чи була покупка пристрою?", reply_markup=kb.as_markup())
 
-# ================= BUY =================
 @dp.callback_query(F.data.startswith("buy_"))
 async def buy(call: CallbackQuery):
 
@@ -107,7 +112,6 @@ async def buy(call: CallbackQuery):
 
     await call.message.answer("Чи був прокат?", reply_markup=kb.as_markup())
 
-# ================= RENT =================
 @dp.callback_query(F.data.startswith("rent_"))
 async def rent(call: CallbackQuery):
 
@@ -122,7 +126,6 @@ async def rent(call: CallbackQuery):
 
     await call.message.answer("Чи була реєстрація на сайті?", reply_markup=kb.as_markup())
 
-# ================= SITE REG =================
 @dp.callback_query(F.data.startswith("site_"))
 async def site(call: CallbackQuery):
 
@@ -137,7 +140,6 @@ async def site(call: CallbackQuery):
 
     await call.message.answer("Чи була реєстрація пристрою?", reply_markup=kb.as_markup())
 
-# ================= DEVICE REG =================
 @dp.callback_query(F.data.startswith("device_"))
 async def device(call: CallbackQuery):
 
@@ -148,7 +150,7 @@ async def device(call: CallbackQuery):
     user_state[uid] = "awaiting_comment"
     await call.message.answer("Напиши коментар (або '-')")
 
-# ================= MAIN HANDLER =================
+# ================= MAIN =================
 @dp.message()
 async def handle_all(message: Message):
 
@@ -190,11 +192,11 @@ async def handle_all(message: Message):
         await message.answer("Які стіки використано?", reply_markup=kb.as_markup())
         return
 
-    # -------- COMMENT SAVE --------
+    # -------- SAVE --------
     if user_state.get(uid) == "awaiting_comment" and uid in temp:
 
         data = temp[uid]
-        sticks = ", ".join(data.get("sticks", []))
+        sticks = ", ".join(data["sticks"])
 
         async with aiosqlite.connect("data.db") as db:
             await db.execute("""
@@ -208,10 +210,10 @@ async def handle_all(message: Message):
             """, (
                 uid,
                 sticks,
-                data.get("buy", 0),
-                data.get("rent", 0),
-                data.get("site_reg", 0),
-                data.get("device_reg", 0),
+                data["buy"],
+                data["rent"],
+                data["site_reg"],
+                data["device_reg"],
                 text,
                 datetime.now().strftime("%Y-%m-%d %H:%M")
             ))
@@ -220,10 +222,55 @@ async def handle_all(message: Message):
         temp.pop(uid, None)
         user_state[uid] = "ready"
 
-        await message.answer("✅ Демонстрацію збережено!", reply_markup=main_menu())
+        await message.answer("✅ Збережено!", reply_markup=main_menu())
         return
 
-    # -------- TEAM STATS (ADMIN ONLY) --------
+    # ================= PERSONAL STATS (FIXED + STICKS) =================
+    if text == "📊 Моя статистика (7 днів)":
+
+        async with aiosqlite.connect("data.db") as db:
+            rows = await db.execute_fetchall("""
+            SELECT sticks, buy, rent, site_reg, device_reg
+            FROM demos
+            WHERE user_id = ?
+            """, (uid,))
+
+        total = buy = rent = site = device = 0
+        silver = pink = orange = 0
+
+        for r in rows:
+            total += 1
+            buy += r[1]
+            rent += r[2]
+            site += r[3]
+            device += r[4]
+
+            sticks = r[0] or ""
+
+            if "Silver" in sticks:
+                silver += 1
+            if "Pink" in sticks:
+                pink += 1
+            if "Orange" in sticks:
+                orange += 1
+
+        await message.answer(f"""
+📊 Моя статистика:
+
+📌 Демо: {total}
+
+💰 Покупки: {buy}
+📦 Прокати: {rent}
+🌐 Сайт реєстрація: {site}
+📱 Реєстрація пристрою: {device}
+
+🩶 EVO Silver: {silver}
+🩷 EVO Pink Option: {pink}
+🧡 EVO Orange: {orange}
+""")
+        return
+
+    # ================= TEAM STATS (ADMIN ONLY) =================
     if text == "👥 Командна статистика":
 
         if uid != ADMIN_ID:
@@ -231,93 +278,31 @@ async def handle_all(message: Message):
             return
 
         async with aiosqlite.connect("data.db") as db:
-            rows = await db.execute_fetchall("SELECT * FROM demos")
+            rows = await db.execute_fetchall("""
+            SELECT buy, rent, site_reg, device_reg
+            FROM demos
+            """)
 
-        buy = rent = site = device = 0
+        buy = rent = site = device = total = 0
 
         for r in rows:
-            buy += r[3]
-            rent += r[4]
-            site += r[5]
-            device += r[6]
+            total += 1
+            buy += r[0]
+            rent += r[1]
+            site += r[2]
+            device += r[3]
 
         await message.answer(f"""
 👥 Командна статистика:
 
-📊 Демо: {len(rows)}
+📊 Демо: {total}
 
 💰 Покупки: {buy}
 📦 Прокати: {rent}
-🌐 Реєстрація на сайті: {site}
+🌐 Сайт реєстрація: {site}
 📱 Реєстрація пристрою: {device}
 """)
         return
-
-    # -------- TOP (ADMIN ONLY) --------
-    if text == "🏆 ТОП експерти":
-
-        if uid != ADMIN_ID:
-            await message.answer("⛔ Немає доступу")
-            return
-
-        async with aiosqlite.connect("data.db") as db:
-            rows = await db.execute_fetchall("""
-            SELECT user_id, COUNT(*) as cnt
-            FROM demos
-            GROUP BY user_id
-            ORDER BY cnt DESC
-            LIMIT 10
-            """)
-
-            users = await db.execute_fetchall("SELECT user_id, name FROM users")
-
-        names = {u[0]: u[1] for u in users}
-
-        out = "🏆 ТОП експерти:\n\n"
-        for i, r in enumerate(rows, 1):
-            out += f"{i}. {names.get(r[0], 'Невідомий')} — {r[1]} демо\n"
-
-        await message.answer(out)
-        return
-
-# ================= STATS =================
-async def weekly_stats(message: Message):
-
-    uid = message.from_user.id
-    week = datetime.now() - timedelta(days=7)
-
-    async with aiosqlite.connect("data.db") as db:
-        rows = await db.execute_fetchall("""
-        SELECT sticks, time FROM demos WHERE user_id = ?
-        """, (uid,))
-
-    total = silver = pink = orange = 0
-
-    for r in rows:
-        try:
-            t = datetime.strptime(r[1], "%Y-%m-%d %H:%M")
-            if t >= week:
-                total += 1
-                s = r[0] or ""
-
-                if "Silver" in s:
-                    silver += 1
-                if "Pink" in s:
-                    pink += 1
-                if "Orange" in s:
-                    orange += 1
-        except:
-            pass
-
-    await message.answer(f"""
-📊 Статистика (7 днів):
-
-📌 Демо: {total}
-
-🩶 Silver: {silver}
-🩷 Pink: {pink}
-🧡 Orange: {orange}
-""")
 
 # ================= RUN =================
 async def main():
