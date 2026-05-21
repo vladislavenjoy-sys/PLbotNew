@@ -67,7 +67,7 @@ async def start(message: Message):
     user_state[message.from_user.id] = "awaiting_name"
     await message.answer("👋 Введіть ваше прізвище та ім’я:")
 
-# ================= STICKS (STABLE) =================
+# ================= STICKS =================
 @dp.callback_query(F.data.startswith("s_"))
 async def sticks(call: CallbackQuery):
 
@@ -90,7 +90,7 @@ async def sticks(call: CallbackQuery):
     if call.data in mapping:
         temp[uid]["sticks"].append(mapping[call.data])
 
-    await call.answer("OK ✔️")
+    await call.answer("OK")
 
 # ================= FLOW =================
 @dp.callback_query(F.data == "done_sticks")
@@ -105,7 +105,6 @@ async def done(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("sale_"))
 async def sale(call: CallbackQuery):
-
     uid = call.from_user.id
     temp[uid]["sale"] = 1 if call.data == "sale_yes" else 0
 
@@ -118,7 +117,6 @@ async def sale(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("rent_"))
 async def rent(call: CallbackQuery):
-
     uid = call.from_user.id
     temp[uid]["rent"] = 1 if call.data == "rent_yes" else 0
 
@@ -131,7 +129,6 @@ async def rent(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("site_"))
 async def site(call: CallbackQuery):
-
     uid = call.from_user.id
     temp[uid]["site_reg"] = 1 if call.data == "site_yes" else 0
 
@@ -144,7 +141,6 @@ async def site(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("device_"))
 async def device(call: CallbackQuery):
-
     uid = call.from_user.id
     temp[uid]["device_reg"] = 1 if call.data == "device_yes" else 0
 
@@ -153,7 +149,7 @@ async def device(call: CallbackQuery):
 
 # ================= SAVE =================
 @dp.message()
-async def handle_all(message: Message):
+async def handler(message: Message):
 
     uid = message.from_user.id
     text = message.text
@@ -169,7 +165,7 @@ async def handle_all(message: Message):
             await db.commit()
 
         user_state[uid] = "ready"
-        await message.answer("✅ Зареєстровано!", reply_markup=main_menu())
+        await message.answer("✅ OK", reply_markup=main_menu())
         return
 
     # NEW DEMO
@@ -190,7 +186,7 @@ async def handle_all(message: Message):
         kb.button(text="✅ Завершити", callback_data="done_sticks")
         kb.adjust(1)
 
-        await message.answer("Які стіки використано?", reply_markup=kb.as_markup())
+        await message.answer("Які стіки?", reply_markup=kb.as_markup())
         return
 
     # SAVE
@@ -223,40 +219,10 @@ async def handle_all(message: Message):
         temp.pop(uid, None)
         user_state[uid] = "ready"
 
-        await message.answer("✅ Збережено!", reply_markup=main_menu())
+        await message.answer("✅ Збережено", reply_markup=main_menu())
         return
 
-    # ================= TOP EXPERTS (FIXED 100%) =================
-    if text == "🏆 ТОП експерти":
-
-        if uid != ADMIN_ID:
-            await message.answer("⛔ Немає доступу")
-            return
-
-        async with aiosqlite.connect("data.db") as db:
-
-            rows = await db.execute_fetchall("""
-            SELECT user_id, COUNT(*)
-            FROM demos
-            GROUP BY user_id
-            ORDER BY COUNT(*) DESC
-        """)
-
-            users = await db.execute_fetchall("""
-            SELECT user_id, name FROM users
-            """)
-
-        names = {u[0]: u[1] for u in users}
-
-        out = "🏆 ТОП ЕКСПЕРТИ\n\n"
-
-        for i, r in enumerate(rows, 1):
-            out += f"{i}. {names.get(r[0], 'Невідомий')} — {r[1]} демо\n"
-
-        await message.answer(out)
-        return
-
-    # ================= PERSONAL STATS =================
+    # ================= PERSONAL =================
     if text == "📊 Моя статистика (7 днів)":
 
         async with aiosqlite.connect("data.db") as db:
@@ -286,14 +252,13 @@ async def handle_all(message: Message):
                 orange += 1
 
         await message.answer(f"""
-📊 МОЯ СТАТИСТИКА
+📊 Моя статистика
 
-📌 Демо: {total}
-
-💰 Продажі: {sale}
-📦 Прокати: {rent}
-🌐 Сайт: {site}
-📱 Пристрій: {device}
+Демо: {total}
+Продажі: {sale}
+Прокати: {rent}
+Сайт: {site}
+Пристрій: {device}
 
 🩶 Silver: {silver}
 🩷 Pink: {pink}
@@ -301,7 +266,7 @@ async def handle_all(message: Message):
 """)
         return
 
-    # ================= ADMIN STATS =================
+    # ================= ADMIN DASHBOARD FULL =================
     if text == "👥 Командна статистика":
 
         if uid != ADMIN_ID:
@@ -309,30 +274,94 @@ async def handle_all(message: Message):
             return
 
         async with aiosqlite.connect("data.db") as db:
-            rows = await db.execute_fetchall("""
-            SELECT sale, rent, site_reg, device_reg
+
+            demos = await db.execute_fetchall("""
+            SELECT user_id, sale, rent, site_reg, device_reg
             FROM demos
             """)
 
-        sale = rent = site = device = total = 0
+            users = await db.execute_fetchall("""
+            SELECT user_id, name FROM users
+            """)
 
-        for r in rows:
-            total += 1
-            sale += r[0]
-            rent += r[1]
-            site += r[2]
-            device += r[3]
+        names = {u[0]: u[1] for u in users}
 
-        await message.answer(f"""
-👥 КОМАНДА
+        stats = defaultdict(lambda: {
+            "demo": 0,
+            "sale": 0,
+            "rent": 0,
+            "site": 0,
+            "device": 0
+        })
 
-📊 Демо: {total}
+        for r in demos:
+            stats[r[0]]["demo"] += 1
+            stats[r[0]]["sale"] += r[1]
+            stats[r[0]]["rent"] += r[2]
+            stats[r[0]]["site"] += r[3]
+            stats[r[0]]["device"] += r[4]
 
-💰 Продажі: {sale}
-📦 Прокати: {rent}
-🌐 Сайт: {site}
-📱 Пристрій: {device}
-""")
+        total_demo = len(demos)
+
+        out = f"""
+👥 КОМАНДА СТАТИСТИКА
+
+📊 Загалом демо: {total_demo}
+
+━━━━━━━━━━━━━━
+👤 ПО ЕКСПЕРТАХ:
+"""
+
+        ranking = []
+
+        for user_id, s in stats.items():
+            conv = (s["sale"] / s["demo"] * 100) if s["demo"] else 0
+            ranking.append((conv, user_id, s))
+
+        ranking.sort(reverse=True)
+
+        for i, (conv, user_id, s) in enumerate(ranking, 1):
+
+            out += f"""
+{i}. {names.get(user_id, "Невідомий")}
+📊 Демо: {s['demo']}
+💰 Продажі: {s['sale']}
+📦 Прокати: {s['rent']}
+🌐 Сайт: {s['site']}
+📱 Пристрій: {s['device']}
+📈 KPI: {round(conv,1)}%
+"""
+
+        await message.answer(out)
+        return
+
+    # ================= TOP (FIXED) =================
+    if text == "🏆 ТОП експерти":
+
+        if uid != ADMIN_ID:
+            await message.answer("⛔ Немає доступу")
+            return
+
+        async with aiosqlite.connect("data.db") as db:
+            rows = await db.execute_fetchall("""
+            SELECT user_id, COUNT(*)
+            FROM demos
+            GROUP BY user_id
+            ORDER BY COUNT(*) DESC
+        """)
+
+            users = await db.execute_fetchall("""
+            SELECT user_id, name FROM users
+            """)
+
+        names = {u[0]: u[1] for u in users}
+
+        out = "🏆 ТОП ЕКСПЕРТИ\n\n"
+
+        for i, r in enumerate(rows, 1):
+            out += f"{i}. {names.get(r[0], 'Невідомий')} — {r[1]} демо\n"
+
+        await message.answer(out)
         return
 
 # ================= RUN =================
