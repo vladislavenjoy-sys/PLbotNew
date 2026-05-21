@@ -7,6 +7,7 @@ from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardB
 from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import os
+from collections import defaultdict
 
 # ================= TOKEN =================
 TOKEN = os.getenv("BOT_TOKEN")
@@ -37,7 +38,7 @@ async def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             sticks TEXT,
-            buy INTEGER,
+            sale INTEGER,
             rent INTEGER,
             site_reg INTEGER,
             device_reg INTEGER,
@@ -73,7 +74,7 @@ async def sticks(call: CallbackQuery):
     uid = call.from_user.id
     temp.setdefault(uid, {
         "sticks": [],
-        "buy": 0,
+        "sale": 0,
         "rent": 0,
         "site_reg": 0,
         "device_reg": 0
@@ -93,18 +94,18 @@ async def sticks(call: CallbackQuery):
 async def done(call: CallbackQuery):
 
     kb = InlineKeyboardBuilder()
-    kb.button(text="Так", callback_data="buy_yes")
-    kb.button(text="Ні", callback_data="buy_no")
+    kb.button(text="Так", callback_data="sale_yes")
+    kb.button(text="Ні", callback_data="sale_no")
     kb.adjust(2)
 
-    await call.message.answer("Чи була покупка пристрою?", reply_markup=kb.as_markup())
+    await call.message.answer("Чи була продаж пристрою?", reply_markup=kb.as_markup())
 
-@dp.callback_query(F.data.startswith("buy_"))
-async def buy(call: CallbackQuery):
+@dp.callback_query(F.data.startswith("sale_"))
+async def sale(call: CallbackQuery):
 
     uid = call.from_user.id
     if uid in temp:
-        temp[uid]["buy"] = 1 if call.data == "buy_yes" else 0
+        temp[uid]["sale"] = 1 if call.data == "sale_yes" else 0
 
     kb = InlineKeyboardBuilder()
     kb.button(text="Так", callback_data="rent_yes")
@@ -177,7 +178,7 @@ async def handle_all(message: Message):
 
         temp[uid] = {
             "sticks": [],
-            "buy": 0,
+            "sale": 0,
             "rent": 0,
             "site_reg": 0,
             "device_reg": 0
@@ -193,7 +194,7 @@ async def handle_all(message: Message):
         await message.answer("Які стіки використано?", reply_markup=kb.as_markup())
         return
 
-    # SAVE DEMO
+    # SAVE
     if user_state.get(uid) == "awaiting_comment" and uid in temp:
 
         data = temp[uid]
@@ -203,7 +204,7 @@ async def handle_all(message: Message):
             await db.execute("""
             INSERT INTO demos (
                 user_id, sticks,
-                buy, rent,
+                sale, rent,
                 site_reg, device_reg,
                 comment, time
             )
@@ -211,7 +212,7 @@ async def handle_all(message: Message):
             """, (
                 uid,
                 sticks,
-                data["buy"],
+                data["sale"],
                 data["rent"],
                 data["site_reg"],
                 data["device_reg"],
@@ -226,51 +227,42 @@ async def handle_all(message: Message):
         await message.answer("✅ Збережено!", reply_markup=main_menu())
         return
 
-    # ================= PERSONAL STATS =================
+    # ================= PERSONAL KPI =================
     if text == "📊 Моя статистика (7 днів)":
 
         async with aiosqlite.connect("data.db") as db:
             rows = await db.execute_fetchall("""
-            SELECT sticks, buy, rent, site_reg, device_reg
+            SELECT sale, rent, site_reg, device_reg
             FROM demos
             WHERE user_id = ?
             """, (uid,))
 
-        total = buy = rent = site = device = 0
-        silver = pink = orange = 0
+        total = sale = rent = site = device = 0
 
         for r in rows:
             total += 1
-            buy += r[1]
-            rent += r[2]
-            site += r[3]
-            device += r[4]
+            sale += r[0]
+            rent += r[1]
+            site += r[2]
+            device += r[3]
 
-            s = r[0] or ""
-            if "Silver" in s:
-                silver += 1
-            if "Pink" in s:
-                pink += 1
-            if "Orange" in s:
-                orange += 1
+        conv = round((sale / total * 100), 1) if total > 0 else 0
 
         await message.answer(f"""
-📊 Моя статистика:
+📊 Моя KPI статистика:
 
 📌 Демо: {total}
 
-💰 Покупки: {buy}
+💰 Продажі: {sale}
 📦 Прокати: {rent}
-🌐 Сайт реєстрація: {site}
-📱 Реєстрація пристрою: {device}
+🌐 Сайт: {site}
+📱 Пристрій: {device}
 
-🩶 Silver: {silver}
-🩷 Pink: {pink}
-🧡 Orange: {orange}
+📈 Конверсія: {conv}%
 """)
         return
 
-    # ================= TEAM (ADMIN ONLY) =================
+    # ================= TEAM + KPI + USERS =================
     if text == "👥 Командна статистика":
 
         if uid != ADMIN_ID:
@@ -278,46 +270,10 @@ async def handle_all(message: Message):
             return
 
         async with aiosqlite.connect("data.db") as db:
-            rows = await db.execute_fetchall("""
-            SELECT buy, rent, site_reg, device_reg
+
+            demos = await db.execute_fetchall("""
+            SELECT user_id, sale, rent, site_reg, device_reg
             FROM demos
-            """)
-
-        buy = rent = site = device = total = 0
-
-        for r in rows:
-            total += 1
-            buy += r[0]
-            rent += r[1]
-            site += r[2]
-            device += r[3]
-
-        await message.answer(f"""
-👥 Командна статистика:
-
-📊 Демо: {total}
-
-💰 Покупки: {buy}
-📦 Прокати: {rent}
-🌐 Сайт реєстрація: {site}
-📱 Реєстрація пристрою: {device}
-""")
-        return
-
-    # ================= TOP EXPERTS (RETURNED) =================
-    if text == "🏆 ТОП експерти":
-
-        if uid != ADMIN_ID:
-            await message.answer("⛔ Немає доступу")
-            return
-
-        async with aiosqlite.connect("data.db") as db:
-            rows = await db.execute_fetchall("""
-            SELECT user_id, COUNT(*) as cnt
-            FROM demos
-            GROUP BY user_id
-            ORDER BY cnt DESC
-            LIMIT 10
             """)
 
             users = await db.execute_fetchall("""
@@ -326,10 +282,53 @@ async def handle_all(message: Message):
 
         names = {u[0]: u[1] for u in users}
 
-        out = "🏆 ТОП експерти:\n\n"
+        stats = defaultdict(lambda: {
+            "demo": 0,
+            "sale": 0,
+            "rent": 0,
+            "site": 0,
+            "device": 0
+        })
 
-        for i, r in enumerate(rows, 1):
-            out += f"{i}. {names.get(r[0], 'Невідомий')} — {r[1]} демо\n"
+        for r in demos:
+            uid2 = r[0]
+            stats[uid2]["demo"] += 1
+            stats[uid2]["sale"] += r[1]
+            stats[uid2]["rent"] += r[2]
+            stats[uid2]["site"] += r[3]
+            stats[uid2]["device"] += r[4]
+
+        total_demo = len(demos)
+
+        out = f"""
+👥 КОМАНДА KPI
+
+📊 Загалом демо: {total_demo}
+
+━━━━━━━━━━━━━━
+👤 Експерти:
+"""
+
+        ranking = []
+
+        for user_id, s in stats.items():
+
+            conv = (s["sale"] / s["demo"] * 100) if s["demo"] > 0 else 0
+            ranking.append((conv, user_id, s))
+
+        ranking.sort(reverse=True)
+
+        for i, (conv, user_id, s) in enumerate(ranking, 1):
+
+            out += f"""
+{i}. {names.get(user_id, "Невідомий")}
+📊 Демо: {s['demo']}
+💰 Продажі: {s['sale']}
+📦 Прокати: {s['rent']}
+🌐 Сайт: {s['site']}
+📱 Пристрій: {s['device']}
+📈 KPI: {round(conv,1)}%
+"""
 
         await message.answer(out)
         return
