@@ -59,9 +59,75 @@ async def start(message: Message):
 
     await message.answer("👋 Введіть ваше прізвище та ім’я:")
 
-# ---------------- MAIN TEXT HANDLER ----------------
+# ---------------- CALLBACKS ----------------
+@dp.callback_query(F.data.startswith("s_"))
+async def sticks(call: CallbackQuery):
+
+    uid = call.from_user.id
+    if uid not in temp:
+        temp[uid] = {"sticks": [], "buy": 0, "rent": 0, "reg": 0}
+
+    if call.data == "s_silver":
+        temp[uid]["sticks"].append("EVO Silver")
+    elif call.data == "s_pink":
+        temp[uid]["sticks"].append("EVO Pink Option")
+    elif call.data == "s_orange":
+        temp[uid]["sticks"].append("EVO Orange")
+
+    await call.answer("Додано ✔️")
+
+@dp.callback_query(F.data == "done_sticks")
+async def done(call: CallbackQuery):
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Так", callback_data="buy_yes")
+    kb.button(text="Ні", callback_data="buy_no")
+    kb.adjust(2)
+
+    await call.message.answer("Чи була покупка пристрою?", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("buy_"))
+async def buy(call: CallbackQuery):
+
+    uid = call.from_user.id
+    if uid in temp:
+        temp[uid]["buy"] = 1 if call.data == "buy_yes" else 0
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Так", callback_data="rent_yes")
+    kb.button(text="Ні", callback_data="rent_no")
+    kb.adjust(2)
+
+    await call.message.answer("Чи був прокат?", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("rent_"))
+async def rent(call: CallbackQuery):
+
+    uid = call.from_user.id
+    if uid in temp:
+        temp[uid]["rent"] = 1 if call.data == "rent_yes" else 0
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Так", callback_data="reg_yes")
+    kb.button(text="Ні", callback_data="reg_no")
+    kb.adjust(2)
+
+    await call.message.answer("Чи була реєстрація?", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("reg_"))
+async def reg(call: CallbackQuery):
+
+    uid = call.from_user.id
+    if uid in temp:
+        temp[uid]["reg"] = 1 if call.data == "reg_yes" else 0
+
+    user_state[uid] = "awaiting_comment"
+
+    await call.message.answer("Напиши коментар (або '-')")
+
+# ---------------- MAIN LOGIC ----------------
 @dp.message()
-async def handle_text(message: Message):
+async def handle_all(message: Message):
 
     uid = message.from_user.id
     text = message.text
@@ -77,7 +143,6 @@ async def handle_text(message: Message):
             await db.commit()
 
         user_state[uid] = "ready"
-
         await message.answer("✅ Зареєстровано!", reply_markup=main_menu())
         return
 
@@ -101,106 +166,35 @@ async def handle_text(message: Message):
         await weekly_stats(message)
         return
 
-# ---------------- STICKS ----------------
-@dp.callback_query(F.data.startswith("s_"))
-async def sticks(call: CallbackQuery):
+    # ---------------- COMMENT SAVE ----------------
+    if user_state.get(uid) == "awaiting_comment":
 
-    uid = call.from_user.id
+        if uid not in temp:
+            return
 
-    if uid not in temp:
-        temp[uid] = {"sticks": [], "buy": 0, "rent": 0, "reg": 0}
+        data = temp[uid]
+        sticks = ", ".join(data.get("sticks", []))
 
-    if call.data == "s_silver":
-        temp[uid]["sticks"].append("EVO Silver")
-    elif call.data == "s_pink":
-        temp[uid]["sticks"].append("EVO Pink Option")
-    elif call.data == "s_orange":
-        temp[uid]["sticks"].append("EVO Orange")
+        async with aiosqlite.connect("data.db") as db:
+            await db.execute("""
+            INSERT INTO demos (user_id, sticks, buy, rent, reg, comment, time)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                uid,
+                sticks,
+                data.get("buy", 0),
+                data.get("rent", 0),
+                data.get("reg", 0),
+                text,
+                datetime.now().strftime("%Y-%m-%d %H:%M")
+            ))
+            await db.commit()
 
-    await call.answer("Додано ✔️")
+        temp.pop(uid, None)
+        user_state[uid] = "ready"
 
-# ---------------- FINISH STICKS ----------------
-@dp.callback_query(F.data == "done_sticks")
-async def done(call: CallbackQuery):
-
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Так", callback_data="buy_yes")
-    kb.button(text="Ні", callback_data="buy_no")
-    kb.adjust(2)
-
-    await call.message.answer("Чи була покупка пристрою?", reply_markup=kb.as_markup())
-
-# ---------------- BUY ----------------
-@dp.callback_query(F.data.startswith("buy_"))
-async def buy(call: CallbackQuery):
-
-    uid = call.from_user.id
-    if uid in temp:
-        temp[uid]["buy"] = 1 if call.data == "buy_yes" else 0
-
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Так", callback_data="rent_yes")
-    kb.button(text="Ні", callback_data="rent_no")
-    kb.adjust(2)
-
-    await call.message.answer("Чи був прокат?", reply_markup=kb.as_markup())
-
-# ---------------- RENT ----------------
-@dp.callback_query(F.data.startswith("rent_"))
-async def rent(call: CallbackQuery):
-
-    uid = call.from_user.id
-    if uid in temp:
-        temp[uid]["rent"] = 1 if call.data == "rent_yes" else 0
-
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Так", callback_data="reg_yes")
-    kb.button(text="Ні", callback_data="reg_no")
-    kb.adjust(2)
-
-    await call.message.answer("Чи була реєстрація?", reply_markup=kb.as_markup())
-
-# ---------------- REG ----------------
-@dp.callback_query(F.data.startswith("reg_"))
-async def reg(call: CallbackQuery):
-
-    uid = call.from_user.id
-    if uid in temp:
-        temp[uid]["reg"] = 1 if call.data == "reg_yes" else 0
-
-    await call.message.answer("Напиши коментар (або '-')")
-
-# ---------------- SAVE DEMO ----------------
-@dp.message()
-async def save_demo(message: Message):
-
-    uid = message.from_user.id
-
-    if uid not in temp:
+        await message.answer("✅ Демонстрацію збережено!", reply_markup=main_menu())
         return
-
-    data = temp[uid]
-
-    sticks = ", ".join(data.get("sticks", []))
-
-    async with aiosqlite.connect("data.db") as db:
-        await db.execute("""
-        INSERT INTO demos (user_id, sticks, buy, rent, reg, comment, time)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            uid,
-            sticks,
-            data.get("buy", 0),
-            data.get("rent", 0),
-            data.get("reg", 0),
-            message.text,
-            datetime.now().strftime("%Y-%m-%d %H:%M")
-        ))
-        await db.commit()
-
-    temp.pop(uid, None)
-
-    await message.answer("✅ Демонстрацію збережено!", reply_markup=main_menu())
 
 # ---------------- WEEK STATS ----------------
 async def weekly_stats(message: Message):
