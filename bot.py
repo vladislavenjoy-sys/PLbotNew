@@ -67,11 +67,12 @@ async def start(message: Message):
     user_state[message.from_user.id] = "awaiting_name"
     await message.answer("👋 Введіть ваше прізвище та ім’я:")
 
-# ================= STICKS =================
+# ================= STICKS (STABLE) =================
 @dp.callback_query(F.data.startswith("s_"))
 async def sticks(call: CallbackQuery):
 
     uid = call.from_user.id
+
     temp.setdefault(uid, {
         "sticks": [],
         "sale": 0,
@@ -80,14 +81,16 @@ async def sticks(call: CallbackQuery):
         "device_reg": 0
     })
 
-    if call.data == "s_silver":
-        temp[uid]["sticks"].append("EVO Silver")
-    elif call.data == "s_pink":
-        temp[uid]["sticks"].append("EVO Pink Option")
-    elif call.data == "s_orange":
-        temp[uid]["sticks"].append("EVO Orange")
+    mapping = {
+        "s_silver": "EVO Silver",
+        "s_pink": "EVO Pink Option",
+        "s_orange": "EVO Orange"
+    }
 
-    await call.answer("Додано ✔️")
+    if call.data in mapping:
+        temp[uid]["sticks"].append(mapping[call.data])
+
+    await call.answer("OK ✔️")
 
 # ================= FLOW =================
 @dp.callback_query(F.data == "done_sticks")
@@ -104,8 +107,7 @@ async def done(call: CallbackQuery):
 async def sale(call: CallbackQuery):
 
     uid = call.from_user.id
-    if uid in temp:
-        temp[uid]["sale"] = 1 if call.data == "sale_yes" else 0
+    temp[uid]["sale"] = 1 if call.data == "sale_yes" else 0
 
     kb = InlineKeyboardBuilder()
     kb.button(text="Так", callback_data="rent_yes")
@@ -118,8 +120,7 @@ async def sale(call: CallbackQuery):
 async def rent(call: CallbackQuery):
 
     uid = call.from_user.id
-    if uid in temp:
-        temp[uid]["rent"] = 1 if call.data == "rent_yes" else 0
+    temp[uid]["rent"] = 1 if call.data == "rent_yes" else 0
 
     kb = InlineKeyboardBuilder()
     kb.button(text="Так", callback_data="site_yes")
@@ -132,8 +133,7 @@ async def rent(call: CallbackQuery):
 async def site(call: CallbackQuery):
 
     uid = call.from_user.id
-    if uid in temp:
-        temp[uid]["site_reg"] = 1 if call.data == "site_yes" else 0
+    temp[uid]["site_reg"] = 1 if call.data == "site_yes" else 0
 
     kb = InlineKeyboardBuilder()
     kb.button(text="Так", callback_data="device_yes")
@@ -146,8 +146,7 @@ async def site(call: CallbackQuery):
 async def device(call: CallbackQuery):
 
     uid = call.from_user.id
-    if uid in temp:
-        temp[uid]["device_reg"] = 1 if call.data == "device_yes" else 0
+    temp[uid]["device_reg"] = 1 if call.data == "device_yes" else 0
 
     user_state[uid] = "awaiting_comment"
     await call.message.answer("Напиши коментар (або '-')")
@@ -227,29 +226,67 @@ async def handle_all(message: Message):
         await message.answer("✅ Збережено!", reply_markup=main_menu())
         return
 
-    # ================= PERSONAL KPI =================
+    # ================= TOP EXPERTS (FIXED 100%) =================
+    if text == "🏆 ТОП експерти":
+
+        if uid != ADMIN_ID:
+            await message.answer("⛔ Немає доступу")
+            return
+
+        async with aiosqlite.connect("data.db") as db:
+
+            rows = await db.execute_fetchall("""
+            SELECT user_id, COUNT(*)
+            FROM demos
+            GROUP BY user_id
+            ORDER BY COUNT(*) DESC
+        """)
+
+            users = await db.execute_fetchall("""
+            SELECT user_id, name FROM users
+            """)
+
+        names = {u[0]: u[1] for u in users}
+
+        out = "🏆 ТОП ЕКСПЕРТИ\n\n"
+
+        for i, r in enumerate(rows, 1):
+            out += f"{i}. {names.get(r[0], 'Невідомий')} — {r[1]} демо\n"
+
+        await message.answer(out)
+        return
+
+    # ================= PERSONAL STATS =================
     if text == "📊 Моя статистика (7 днів)":
 
         async with aiosqlite.connect("data.db") as db:
             rows = await db.execute_fetchall("""
-            SELECT sale, rent, site_reg, device_reg
+            SELECT sticks, sale, rent, site_reg, device_reg
             FROM demos
             WHERE user_id = ?
             """, (uid,))
 
         total = sale = rent = site = device = 0
+        silver = pink = orange = 0
 
         for r in rows:
             total += 1
-            sale += r[0]
-            rent += r[1]
-            site += r[2]
-            device += r[3]
+            sale += r[1]
+            rent += r[2]
+            site += r[3]
+            device += r[4]
 
-        conv = round((sale / total * 100), 1) if total > 0 else 0
+            s = r[0] or ""
+
+            if "Silver" in s:
+                silver += 1
+            if "Pink" in s:
+                pink += 1
+            if "Orange" in s:
+                orange += 1
 
         await message.answer(f"""
-📊 Моя KPI статистика:
+📊 МОЯ СТАТИСТИКА
 
 📌 Демо: {total}
 
@@ -258,11 +295,13 @@ async def handle_all(message: Message):
 🌐 Сайт: {site}
 📱 Пристрій: {device}
 
-📈 Конверсія: {conv}%
+🩶 Silver: {silver}
+🩷 Pink: {pink}
+🧡 Orange: {orange}
 """)
         return
 
-    # ================= TEAM + KPI + USERS =================
+    # ================= ADMIN STATS =================
     if text == "👥 Командна статистика":
 
         if uid != ADMIN_ID:
@@ -270,67 +309,30 @@ async def handle_all(message: Message):
             return
 
         async with aiosqlite.connect("data.db") as db:
-
-            demos = await db.execute_fetchall("""
-            SELECT user_id, sale, rent, site_reg, device_reg
+            rows = await db.execute_fetchall("""
+            SELECT sale, rent, site_reg, device_reg
             FROM demos
             """)
 
-            users = await db.execute_fetchall("""
-            SELECT user_id, name FROM users
-            """)
+        sale = rent = site = device = total = 0
 
-        names = {u[0]: u[1] for u in users}
+        for r in rows:
+            total += 1
+            sale += r[0]
+            rent += r[1]
+            site += r[2]
+            device += r[3]
 
-        stats = defaultdict(lambda: {
-            "demo": 0,
-            "sale": 0,
-            "rent": 0,
-            "site": 0,
-            "device": 0
-        })
+        await message.answer(f"""
+👥 КОМАНДА
 
-        for r in demos:
-            uid2 = r[0]
-            stats[uid2]["demo"] += 1
-            stats[uid2]["sale"] += r[1]
-            stats[uid2]["rent"] += r[2]
-            stats[uid2]["site"] += r[3]
-            stats[uid2]["device"] += r[4]
+📊 Демо: {total}
 
-        total_demo = len(demos)
-
-        out = f"""
-👥 КОМАНДА KPI
-
-📊 Загалом демо: {total_demo}
-
-━━━━━━━━━━━━━━
-👤 Експерти:
-"""
-
-        ranking = []
-
-        for user_id, s in stats.items():
-
-            conv = (s["sale"] / s["demo"] * 100) if s["demo"] > 0 else 0
-            ranking.append((conv, user_id, s))
-
-        ranking.sort(reverse=True)
-
-        for i, (conv, user_id, s) in enumerate(ranking, 1):
-
-            out += f"""
-{i}. {names.get(user_id, "Невідомий")}
-📊 Демо: {s['demo']}
-💰 Продажі: {s['sale']}
-📦 Прокати: {s['rent']}
-🌐 Сайт: {s['site']}
-📱 Пристрій: {s['device']}
-📈 KPI: {round(conv,1)}%
-"""
-
-        await message.answer(out)
+💰 Продажі: {sale}
+📦 Прокати: {rent}
+🌐 Сайт: {site}
+📱 Пристрій: {device}
+""")
         return
 
 # ================= RUN =================
