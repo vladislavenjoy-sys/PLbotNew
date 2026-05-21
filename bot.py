@@ -1,10 +1,12 @@
 import asyncio
+import aiosqlite
+from datetime import datetime, timedelta
+
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-import aiosqlite
-from datetime import datetime
+
 import os
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -12,14 +14,19 @@ TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ---------- DB ----------
+# ---------------- DB ----------------
 async def init_db():
     async with aiosqlite.connect("data.db") as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            name TEXT
+        )
+        """)
         await db.execute("""
         CREATE TABLE IF NOT EXISTS demos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
-            username TEXT,
             sticks TEXT,
             buy INTEGER,
             rent INTEGER,
@@ -30,60 +37,95 @@ async def init_db():
         """)
         await db.commit()
 
-# ---------- TEMP STORAGE ----------
-user_data = {}
+# ---------------- MENU ----------------
+def main_menu():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="➕ Нова демонстрація")],
+            [KeyboardButton(text="📊 Моя статистика (7 днів)")]
+        ],
+        resize_keyboard=True
+    )
 
-def add_stick(user_id, stick):
-    if user_id not in user_data:
-        user_data[user_id] = {"sticks": []}
-    user_data[user_id]["sticks"].append(stick)
-
-# ---------- START ----------
+# ---------------- START ----------------
 @dp.message(CommandStart())
 async def start(message: Message):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Нова демонстрація", callback_data="new_demo")
-    kb.adjust(1)
+    await message.answer(
+        "👋 Введіть ваше прізвище та ім’я:",
+        reply_markup=main_menu()
+    )
 
-    await message.answer("Привіт 👋\nНатисни кнопку:", reply_markup=kb.as_markup())
+# ---------------- SAVE NAME ----------------
+@dp.message()
+async def handle_text(message: Message):
+    uid = message.from_user.id
+    text = message.text
 
-# ---------- NEW DEMO ----------
-@dp.callback_query(F.data == "new_demo")
-async def new_demo(call: CallbackQuery):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🩶 EVO Silver", callback_data="stick_silver")
-    kb.button(text="🩷 EVO Pink Option", callback_data="stick_pink")
-    kb.button(text="🧡 EVO Orange", callback_data="stick_orange")
-    kb.button(text="✅ Завершити", callback_data="finish_sticks")
-    kb.adjust(1)
+    async with aiosqlite.connect("data.db") as db:
+        user = await db.execute_fetchone(
+            "SELECT name FROM users WHERE user_id = ?", (uid,)
+        )
 
-    await call.message.answer("Які стіки використали?", reply_markup=kb.as_markup())
+        # якщо користувача ще нема — зберігаємо ім'я
+        if user is None:
+            await db.execute(
+                "INSERT INTO users (user_id, name) VALUES (?, ?)",
+                (uid, text)
+            )
+            await db.commit()
+            await message.answer("✅ Дякую! Дані збережено.", reply_markup=main_menu())
+            return
 
-# ---------- STICKS ----------
-@dp.callback_query(F.data.startswith("stick_"))
-async def stick(call: CallbackQuery):
+    # якщо натиснув "нова демонстрація"
+    if text == "➕ Нова демонстрація":
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🩶 EVO Silver", callback_data="s_silver")
+        kb.button(text="🩷 EVO Pink", callback_data="s_pink")
+        kb.button(text="🧡 EVO Orange", callback_data="s_orange")
+        kb.button(text="✅ Завершити", callback_data="done_sticks")
+        kb.adjust(1)
+
+        await message.answer("Які стіки використано?", reply_markup=kb.as_markup())
+
+    elif text == "📊 Моя статистика (7 днів)":
+        await weekly_stats(message)
+
+# ---------------- TEMP DATA ----------------
+temp = {}
+
+def add_stick(uid, stick):
+    if uid not in temp:
+        temp[uid] = {"sticks": []}
+    temp[uid]["sticks"].append(stick)
+
+# ---------------- STICKS ----------------
+@dp.callback_query(F.data.startswith("s_"))
+async def sticks(call: CallbackQuery):
     uid = call.from_user.id
 
-    if call.data == "stick_silver":
+    if call.data == "s_silver":
         add_stick(uid, "EVO Silver")
-    elif call.data == "stick_pink":
+    elif call.data == "s_pink":
         add_stick(uid, "EVO Pink Option")
-    elif call.data == "stick_orange":
+    elif call.data == "s_orange":
         add_stick(uid, "EVO Orange")
 
     await call.answer("Додано ✔️")
 
-# ---------- FINISH ----------
-@dp.callback_query(F.data == "finish_sticks")
-async def finish(call: CallbackQuery):
+# ---------------- FINISH ----------------
+@dp.callback_query(F.data == "done_sticks")
+async def done(call: CallbackQuery):
+    uid = call.from_user.id
+    temp.setdefault(uid, {})
+
     kb = InlineKeyboardBuilder()
     kb.button(text="Так", callback_data="buy_yes")
     kb.button(text="Ні", callback_data="buy_no")
     kb.adjust(2)
 
-    await call.message.answer("Чи була покупка пристрою?", reply_markup=kb.as_markup())
+    await call.message.answer("Чи була покупка?", reply_markup=kb.as_markup())
 
-# ---------- BUY ----------
+# ---------------- BUY / RENT / REG ----------------
 @dp.callback_query(F.data.startswith("buy_"))
 async def buy(call: CallbackQuery):
     kb = InlineKeyboardBuilder()
@@ -93,7 +135,6 @@ async def buy(call: CallbackQuery):
 
     await call.message.answer("Чи був прокат?", reply_markup=kb.as_markup())
 
-# ---------- RENT ----------
 @dp.callback_query(F.data.startswith("rent_"))
 async def rent(call: CallbackQuery):
     kb = InlineKeyboardBuilder()
@@ -103,50 +144,77 @@ async def rent(call: CallbackQuery):
 
     await call.message.answer("Чи була реєстрація?", reply_markup=kb.as_markup())
 
-# ---------- REG ----------
 @dp.callback_query(F.data.startswith("reg_"))
 async def reg(call: CallbackQuery):
-    await call.message.answer("Напиши коментар клієнта (або '-')")
+    await call.message.answer("Напиши коментар:")
 
-# ---------- COMMENT + SAVE ----------
+# ---------------- SAVE ----------------
 @dp.message()
-async def save(message: Message):
+async def save_demo(message: Message):
     uid = message.from_user.id
 
-    if uid not in user_data:
+    if uid not in temp:
         return
 
-    data = user_data.get(uid, {})
-    sticks = ", ".join(data.get("sticks", []))
-
-    buy = data.get("buy", 0)
-    rent = data.get("rent", 0)
-    reg = data.get("reg", 0)
-
-    comment = message.text
-    time = datetime.now().strftime("%Y-%m-%d %H:%M")
+    sticks = ", ".join(temp[uid].get("sticks", []))
 
     async with aiosqlite.connect("data.db") as db:
         await db.execute("""
-        INSERT INTO demos (user_id, username, sticks, buy, rent, reg, comment, time)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO demos (user_id, sticks, buy, rent, reg, comment, time)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             uid,
-            message.from_user.username,
             sticks,
-            buy,
-            rent,
-            reg,
-            comment,
-            time
+            0, 0, 0,
+            message.text,
+            datetime.now().strftime("%Y-%m-%d %H:%M")
         ))
         await db.commit()
 
-    user_data.pop(uid, None)
+    temp.pop(uid, None)
+    await message.answer("✅ Збережено!", reply_markup=main_menu())
 
-    await message.answer("✅ Збережено!")
-    
+# ---------------- WEEK STATS ----------------
+async def weekly_stats(message: Message):
+    uid = message.from_user.id
+    week_ago = datetime.now() - timedelta(days=7)
 
+    async with aiosqlite.connect("data.db") as db:
+        rows = await db.execute_fetchall("""
+        SELECT sticks, time FROM demos WHERE user_id = ?
+        """, (uid,))
+
+    count = 0
+    silver = pink = orange = 0
+
+    for r in rows:
+        try:
+            t = datetime.strptime(r[1], "%Y-%m-%d %H:%M")
+            if t >= week_ago:
+                count += 1
+                sticks = r[0] or ""
+
+                if "Silver" in sticks:
+                    silver += 1
+                if "Pink" in sticks:
+                    pink += 1
+                if "Orange" in sticks:
+                    orange += 1
+        except:
+            pass
+
+    await message.answer(
+        f"""📊 Статистика за 7 днів:
+
+👤 Ти: {count} демонстрацій
+
+🩶 EVO Silver: {silver}
+🩷 EVO Pink: {pink}
+🧡 EVO Orange: {orange}
+"""
+    )
+
+# ---------------- RUN ----------------
 async def main():
     await init_db()
     await dp.start_polling(bot)
